@@ -6,6 +6,7 @@ import ReactDOM from 'react-dom';
 import { render } from 'react-dom';
 import { withTracker } from 'meteor/react-meteor-data';
 import { ReactiveVar } from 'meteor/reactive-var';
+import { Tracker } from 'meteor/tracker';
 
 import '../imports/startup/accounts-config.js';
 import App from '../imports/ui/App.js';
@@ -79,6 +80,12 @@ function newClock () {
 
 function tuto3 (target) {
   class Clock extends React.Component {
+    redrawnCountPlusPlus() {
+      // The very fact that you have to do this is just bad news.
+      if (! this._redrawnCount) this._redrawnCount = 0
+      this._redrawnCount += 1
+      return this._redrawnCount
+    }
     render() {
       return (
         <div>
@@ -87,6 +94,7 @@ function tuto3 (target) {
             <li key={verse._id}>{verse.text}</li>
             ))}</ul>
           <h2>It is {this.props.time.toLocaleTimeString()}.</h2>
+          <p>This clock was redrawn { this.redrawnCountPlusPlus() } times.</p>
         </div>
       );
     }
@@ -127,8 +135,83 @@ function tuto3 (target) {
            ]}/>, target);
 }
 
+// So arguably, withTracker as demonstrated in tuto3 doesn't *quite*
+// do what we want. It lets you reactively compute some of the props
+// and that's basically it.
+//
+// We want it to be possible to write a React component from a pure
+// render() function that reads from reactive data sources, and
+// automatically re-renders when these sources change.
+//
+// At the same time, we may (or may not) want to make use of
+// the React lifecycle methods.
+
+function tuto4(target) {
+  const clock = newClock();
+  clock.start();
+  const verses = new ReactiveVar([
+             {_id: 1, text: "How are you gentlemen"},
+             {_id: 2, text: "All your base are belong to us"}
+           ])
+  window.verses = verses  // Try to set it from the console e.g.:
+                          // verses.set([])
+
+  const Clock = reactiveRender(() => <h2>It is {clock.get().toLocaleTimeString()}.</h2>);
+  const App = reactiveRender(() => <div>
+      <h1>Hello, world!</h1>
+      <ul>{verses.get().map( verse => (
+        <li key={verse._id}>{verse.text}</li>
+      ))}</ul>
+      <Clock/>
+    </div>);
+  ReactDOM.render(<App/>, target);
+}
+
+function reactiveRender(renderFn) {
+  class ReactiveRender extends React.Component {
+    render () {
+      let renderRetval;
+      // Loosely based on MeteorDataManager.calculateData() in
+      // ReactMeteorData.jsx; we rely on the same reasoning regarding
+      // the necessity of .nonreactive()
+      this.computation = Tracker.nonreactive(() => Tracker.autorun(
+        (c) => { if (c.firstRun) renderRetval = renderFn() }))
+      // Because both Tracker.nonreactive() and Tracker.autorun() call
+      // their argument right away, renderRetval is already set by
+      // now.
+
+      // Again like in ReactMeteorData.jsx, this computation only ever
+      // runs once:
+      this.computation.onInvalidate(() => {
+        this.computation.stop()
+        this.forceUpdate()  // Will wind up calling render() again, and
+                            // reinstate another computation
+      })
+
+      if (Meteor.isDevelopment) {
+        // Bypass this.setState() on purpose; this is for comfort only
+        // (in the React pane in the browser's JS debugger)
+        this.state = {trackerComputationId: this.computation._id }
+      }
+
+      // See above: renderRetval is already set.
+      return renderRetval
+    }
+
+    // The tiny amount of leakage that would occur when tearing down a
+    // ReactiveRender whose computation will never be
+    // invalidated, is the reason only why we can't just return a
+    // render() function.
+    componentWillUnmount() {
+      if (this.computation) this.computation.stop()
+    }
+  }
+
+  return ReactiveRender
+}
+
 Meteor.startup(() => {
   const target = document.getElementById('render-target');
   // render(<App />, target);
-  tuto3(target);
+  tuto4(target);
 });
